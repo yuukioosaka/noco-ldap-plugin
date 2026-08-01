@@ -1,0 +1,23 @@
+{
+  "LDAP": "LDAP",
+  "Sign in": "サインイン",
+  "Please enter your username": "ユーザー名を入力してください",
+  "Please enter a password": "パスワードを入力してください",
+  "Username": "ユーザー名",
+  "Password": "パスワード",
+  "Server URL": "サーバーURL",
+  "Base DN": "Base DN",
+  "Bind DN": "Bind DN",
+  "Bind password": "Bind パスワード",
+  "User search filter": "ユーザー検索フィルター",
+  "Username attribute": "ユーザー名属性",
+  "Display name attribute": "表示名属性",
+  "Email attribute": "メール属性",
+  "Use STARTTLS": "STARTTLS を使用",
+  "Skip TLS certificate verification": "TLS 証明書の検証をスキップ",
+  "CA certificate": "CA 証明書",
+  "Sign up automatically when the user does not exist": "ユーザーが存在しない場合は自動登録する",
+  "User will be registered automatically if not exists.": "ユーザーが存在しない場合は自動的に登録されます。",
+  "The username or password is incorrect, please re-enter": "ユーザー名またはパスワードが正しくありません。再入力してください",
+  "The username is not registered, please contact the administrator": "このユーザー名は登録されていません。管理者に連絡してください"
+}

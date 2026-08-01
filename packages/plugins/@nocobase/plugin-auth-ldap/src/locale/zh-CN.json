@@ -1,0 +1,23 @@
+{
+  "LDAP": "LDAP",
+  "Sign in": "登录",
+  "Please enter your username": "请输入用户名",
+  "Please enter a password": "请输入密码",
+  "Username": "用户名",
+  "Password": "密码",
+  "Server URL": "服务器地址",
+  "Base DN": "Base DN",
+  "Bind DN": "Bind DN",
+  "Bind password": "Bind 密码",
+  "User search filter": "用户搜索过滤器",
+  "Username attribute": "用户名字段",
+  "Display name attribute": "显示名字段",
+  "Email attribute": "邮箱字段",
+  "Use STARTTLS": "使用 STARTTLS",
+  "Skip TLS certificate verification": "跳过 TLS 证书验证",
+  "CA certificate": "CA 证书",
+  "Sign up automatically when the user does not exist": "用户不存在时自动注册",
+  "User will be registered automatically if not exists.": "用户不存在时将自动注册。",
+  "The username or password is incorrect, please re-enter": "用户名或密码错误，请重新输入",
+  "The username is not registered, please contact the administrator": "该用户名未注册，请联系管理员"
+}

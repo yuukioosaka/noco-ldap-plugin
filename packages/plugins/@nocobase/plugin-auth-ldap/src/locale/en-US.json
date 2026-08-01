@@ -1,0 +1,23 @@
+{
+  "LDAP": "LDAP",
+  "Sign in": "Sign in",
+  "Please enter your username": "Please enter your username",
+  "Please enter a password": "Please enter a password",
+  "Username": "Username",
+  "Password": "Password",
+  "Server URL": "Server URL",
+  "Base DN": "Base DN",
+  "Bind DN": "Bind DN",
+  "Bind password": "Bind password",
+  "User search filter": "User search filter",
+  "Username attribute": "Username attribute",
+  "Display name attribute": "Display name attribute",
+  "Email attribute": "Email attribute",
+  "Use STARTTLS": "Use STARTTLS",
+  "Skip TLS certificate verification": "Skip TLS certificate verification",
+  "CA certificate": "CA certificate",
+  "Sign up automatically when the user does not exist": "Sign up automatically when the user does not exist",
+  "User will be registered automatically if not exists.": "User will be registered automatically if not exists.",
+  "The username or password is incorrect, please re-enter": "The username or password is incorrect, please re-enter",
+  "The username is not registered, please contact the administrator": "The username is not registered, please contact the administrator"
+}
