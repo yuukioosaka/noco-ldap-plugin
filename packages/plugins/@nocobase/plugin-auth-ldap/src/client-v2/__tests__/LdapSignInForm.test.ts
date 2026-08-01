@@ -7,6 +7,15 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2026 Yuki Osaka
+ * Authors: Yuki Osaka
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Authenticator } from '@nocobase/plugin-auth/client-v2';
 import { describe, expect, it } from 'vitest';
 import { pickLdapPublicOptions } from '../forms/LdapSignInForm';

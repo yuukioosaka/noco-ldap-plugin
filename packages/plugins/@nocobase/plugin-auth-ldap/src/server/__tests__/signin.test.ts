@@ -7,6 +7,15 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2026 Yuki Osaka
+ * Authors: Yuki Osaka
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import ldapjs, { Server as LdapServer } from 'ldapjs';
 import { Database, Model } from '@nocobase/database';
 import { createMockServer, MockServer } from '@nocobase/test';
