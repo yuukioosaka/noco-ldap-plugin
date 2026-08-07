@@ -19,6 +19,7 @@
 import { AuthConfig, BaseAuth } from '@nocobase/auth';
 import { Model } from '@nocobase/database';
 import { AuthModel } from '@nocobase/plugin-auth';
+import ldapjs from 'ldapjs';
 import { namespace } from '../constants';
 import { LdapClientWrapper, LdapConnectionOptions } from './ldap-client';
 
@@ -37,10 +38,26 @@ type LdapOptions = {
   autoSignup?: boolean;
 };
 
-const DEFAULT_FILTER = '(&(objectClass=user)(sAMAccountName={{username}}))';
-
 function escapeFilterValue(value: string): string {
   return value.replace(/([\\*()\0])/g, '\\$1');
+}
+
+// Escape a value for use inside a DN (LDAP string-typed attribute escape). Used
+// to substitute `$login` in a login-template bind DN, like Redmine's `Net::LDAP::DN.escape`.
+function escapeDnValue(value: string): string {
+  return value.replace(/([/\\,\0])/g, '\\$1');
+}
+
+// Validate an LDAP filter string; returns true only when it parses cleanly. Used
+// to mirror Redmine's `Filter.construct`, which yields nil (→ `(objectClass=*)`)
+// when the configured filter is invalid.
+function isValidFilter(filter: string): boolean {
+  try {
+    ldapjs.parseFilter(filter);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function firstValue(attr: string | string[] | undefined): string | undefined {
@@ -51,10 +68,9 @@ function firstValue(attr: string | string[] | undefined): string | undefined {
 }
 
 export class LDAPAuth extends BaseAuth {
-  // `filter` may contain a `{{username}}` placeholder that must be substituted
-  // at sign-in time; exclude it from NocoBase's env-variable template rendering
-  // (along with the bind password) so it is not resolved to an empty value when
-  // the authenticator is saved/cached.
+  // `bindPassword` must never be templated from env vars (would leak/render it).
+  // The `filter` is an LDAP filter string; keep it literal too so it is not
+  // mangled by env-variable template rendering.
   static readonly optionsKeysNotAllowedInEnv = ['bindPassword', 'filter'];
 
   constructor(config: AuthConfig) {
@@ -70,39 +86,20 @@ export class LDAPAuth extends BaseAuth {
     return { ...opts.public, ...opts, public: undefined } as LdapOptions;
   }
 
+  // Build the LDAP search filter exactly like Redmine: the (optional) `filter`
+  // setting is AND-combined with a term matching the login attribute
+  // (`usernameAttribute`, defaulting to sAMAccountName). If the configured filter
+  // is malformed, drop it and fall back to `(objectClass=*)` (Redmine's
+  // `base_filter`), keeping the login term so authentication still works.
   private buildFilter(account: string): string {
-    const template = this.ldapOptions.filter || DEFAULT_FILTER;
-    return template.replace(/\{\{\s*username\s*\}\}/g, escapeFilterValue(account));
-  }
-
-  // Derive the FQDN from a base DN: "DC=example,DC=com" -> "example.com".
-  // Used to build a UPN when no bind DN is configured.
-  private getDomainFromBaseDN(baseDN: string): string | undefined {
-    const dcs = (baseDN || '')
-      .split(',')
-      .map((p) => p.trim())
-      .filter((p) => /^DC=/i.test(p))
-      .map((p) => p.replace(/^DC=/i, ''));
-    if (!dcs.length) {
-      return undefined;
+    const loginAttr = this.ldapOptions.usernameAttribute || 'sAMAccountName';
+    const loginFilter = `(${escapeFilterValue(loginAttr)}=${escapeFilterValue(account)})`;
+    const configured = this.ldapOptions.filter;
+    const extra = configured && isValidFilter(configured) ? configured : undefined;
+    if (!extra) {
+      return `(&(objectClass=*)${loginFilter})`;
     }
-    return dcs.join('.');
-  }
-
-  // In UPN mode (no bind DN) we bind with the user account directly. Accept
-  // either a full UPN (`yukio@example.com`) or a bare ID (`yukio`) that is
-  // promoted to a UPN using the base DN. Returns the UPN to bind with and the
-  // bare ID to look up attributes with (sAMAccountName).
-  private buildUpn(name: string, baseDN: string): { upn: string; bareId: string } {
-    if (name.includes('@')) {
-      return { upn: name, bareId: name.split('@')[0] };
-    }
-    const domain = this.getDomainFromBaseDN(baseDN);
-    if (domain) {
-      return { upn: `${name}@${domain}`, bareId: name };
-    }
-    // No domain derivable; only usable when the name is already a UPN form.
-    return { upn: name, bareId: name };
+    return `(&${extra}${loginFilter})`;
   }
 
   async validate(): Promise<Model> {
@@ -144,17 +141,22 @@ export class LDAPAuth extends BaseAuth {
         this.ldapOptions.emailAttribute,
       ].filter((attr): attr is string => !!attr);
 
-      const serviceBindDN = this.ldapOptions.bindDN;
+      const bindDn = this.ldapOptions.bindDN;
+      const bindPassword = this.ldapOptions.bindPassword || '';
       let ldapUser;
+      let filter: string | undefined;
 
-      if (serviceBindDN) {
-        // ----- bindDN mode: search via the service account, then bind the user DN -----
-        // When a service account is configured, bind with it first so that the
-        // search is allowed to read the entries needed to build the DN. AD
-        // blocks anonymous LDAP operations by default, so without this every
-        // user search fails. This also supports non-UPN user IDs.
-        const filter = this.buildFilter(name);
-        await ldap.bind(serviceBindDN, this.ldapOptions.bindPassword || '');
+      // Redmine mirrors three bind strategies via its `account` field: a fixed
+      // service account, a `$login`-template account (bind as the end user
+      // himself), or none at all (anonymous). The `bindDN` option plays the role
+      // of Redmine's `account` here, so a `$login` token selects the template mode.
+      const useServiceBind = !!bindDn && !bindDn.includes('$login');
+      const useLoginTemplate = !!bindDn && bindDn.includes('$login');
+
+      if (useServiceBind) {
+        // ----- service-account mode: bind the service account, then search, then bind the user DN -----
+        filter = this.buildFilter(name);
+        await ldap.bind(bindDn, bindPassword);
         ldapUser = await ldap.findUser(baseDN, filter, attributes);
         if (!ldapUser) {
           ctx.logger.warn(
@@ -165,32 +167,44 @@ export class LDAPAuth extends BaseAuth {
         }
         // Verify the end user's password with a bind against their own DN.
         await ldap.bind(ldapUser.dn, password);
-      } else {
-        // ----- UPN mode (default): bind the user account directly, no search needed -----
-        // No bind DN is configured, so we cannot search the directory to resolve a DN.
-        // Instead the user's own account is bound via its UPN. This is the recommended
-        // default and requires UPN-style logins (`user@domain` or a bare ID promoted
-        // with the domain from the base DN).
-        const { upn, bareId } = this.buildUpn(name, baseDN);
+      } else if (useLoginTemplate) {
+        // ----- login-template mode: bind as the end user, then search -----
+        // `bindDN` contains a `$login` token (e.g. `uid=$login,ou=people,dc=example,dc=com`).
+        // The user is bound directly with their own DN and password, which also
+        // authorizes the subsequent attribute search. Mirrors Redmine's `$login` account.
+        const userDn = bindDn.replace(/\$login/g, escapeDnValue(name));
         try {
-          await ldap.bind(upn, password);
+          await ldap.bind(userDn, password);
         } catch (bindErr) {
-          ctx.logger.error(bindErr, { method: 'validate', mode: 'upn', upn });
+          ctx.logger.error(bindErr, { method: 'validate', mode: 'login-template', userDn });
           ctx.throw(401, this.ctx.t('The username or password is incorrect, please re-enter', { ns: namespace }));
         }
-        // Try to fetch attributes as the now-bound user (e.g. sAMAccountName, display
-        // name, email) for signup. AD ACLs may hide other entries, so a failure here
-        // must not block a login that already succeeded via the UPN bind.
-        try {
-          const userFilter = this.buildFilter(bareId);
-          ldapUser = await ldap.findUser(baseDN, userFilter, attributes);
-        } catch (searchErr) {
-          ctx.logger.warn(searchErr, { method: 'validate', mode: 'upn', baseDN });
-        }
+        filter = this.buildFilter(name);
+        ldapUser = await ldap.findUser(baseDN, filter, attributes);
         if (!ldapUser) {
-          const key = (this.ldapOptions.usernameAttribute || 'sAMAccountName').toLowerCase();
-          ldapUser = { dn: upn, attributes: { [key]: bareId } };
+          ctx.logger.warn(
+            'auth-ldap: user could not be found via login-template search — check Base DN / User search filter / Bind DN',
+            { method: 'validate', baseDN, filter },
+          );
+          ctx.throw(401, this.ctx.t('The username or password is incorrect, please re-enter', { ns: namespace }));
         }
+      } else {
+        // ----- anonymous mode: search anonymously, then bind the user DN -----
+        // No service account or `$login` template is configured, so the directory is
+        // searched anonymously to resolve the user's DN, then their password is
+        // verified by binding that DN. Mirrors Redmine, which also does an anonymous
+        // search when no service `account` is set. Anonymous search is unavailable on
+        // AD, which blocks it by default; configure a Bind DN in that case.
+        filter = this.buildFilter(name);
+        ldapUser = await ldap.findUser(baseDN, filter, attributes);
+        if (!ldapUser) {
+          ctx.logger.warn(
+            'auth-ldap: user could not be found via anonymous search — check Base DN / User search filter, or configure a Bind DN (AD disallows anonymous search)',
+            { method: 'validate', baseDN, filter },
+          );
+          ctx.throw(401, this.ctx.t('The username or password is incorrect, please re-enter', { ns: namespace }));
+        }
+        await ldap.bind(ldapUser.dn, password);
       }
 
       return await this.handleSignin(ldapUser.attributes);

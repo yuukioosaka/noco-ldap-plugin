@@ -10,8 +10,8 @@ user automatically on first sign-in.
 ## Features
 
 - Active Directory / LDAP bind authentication
-- **Two bind modes** — UPN direct bind (default) and service-account (Bind DN)
-  lookup (see below)
+- **Three bind modes** — anonymous search (default), service-account (Bind DN),
+  and login-template (`$login`) bind (see below)
 - Supports `ldaps://` (TLS) and STARTTLS
 - Automatic user provisioning enabled by default (`autoSignup`)
 - Attribute mapping to NocoBase user fields (username / nickname / email)
@@ -42,46 +42,72 @@ simple bind, but `ldapjs` cannot, so `ldap://` will not work there. Use
 
 ## Bind modes
 
-The authenticator supports two flows. The required form of the login ID depends
-on which one is used.
+The plugin picks one of three flows depending on the **Bind DN** setting. The
+required form of the login ID depends on which one is in effect.
 
-### Mode 1 — UPN direct bind (default)
+| Bind DN setting                  | Mode                         |
+| -------------------------------- | ---------------------------- |
+| *(empty)*                        | anonymous search (default)   |
+| contains `$login`                | login-template bind          |
+| set but no `$login`              | service-account lookup       |
 
-When **no Bind DN is configured**, the plugin cannot search the directory to
-resolve a DN (AD blocks anonymous search). Instead it binds the user's own
-account directly via its **UPN (User Principal Name)**:
+### Mode 1 — Anonymous search (default)
 
-- `user@example.com` is used as-is.
-- a bare ID such as `yukio` is promoted to `yukio@example.com` using the domain
-  derived from the **Base DN** (`DC=example,DC=com` → `example.com`), then bound.
+When **Bind DN is left empty**, the plugin cannot bind a service account, so it
+searches the directory **anonymously** to resolve the user's DN, then verifies
+the end user's password by binding that DN. No login template is required.
 
-So both `yukio` and `yukio@example.com` work in this mode, and **UPN logins are
-the recommended default**. After a successful bind the plugin searches the
-directory (as the bound user) to fetch attributes (`sAMAccountName`, display
-name, email) for auto-provisioning; if the ACL hides the entry, the login still
-succeeds using the bare ID as the username. Leave **Bind DN** / **Bind
-Password** empty.
+- The login ID is matched literally against the **Username attribute**. With
+  `sAMAccountName` (AD default) a UPN like `yukio@example.com` does **not**
+  match; set the Username attribute to `userPrincipalName`/`mail` instead if
+  you want to sign in with a UPN/email address.
+
+This works on any directory that **allows anonymous searches**. Active Directory
+**blocks anonymous search by default**, so on AD you must configure a Bind DN
+(service account or `$login` template) instead.
 
 ### Mode 2 — Service-account lookup (Bind DN)
 
-Configure a **Bind DN** (a service account with read access) to search for a
-user before binding. The plugin binds with the service account, looks up the
-user with the **User search filter**, then verifies the end user's password by
-binding to the found DN. This also supports **non-UPN user IDs** (e.g. a
+Configure a **Bind DN** (a service account with read access) — **without** the
+literal `$login` token — to search for a user before binding. The plugin binds
+with the service account, looks up the user, then verifies the end user's
+password by binding to the found DN. This supports **non-UPN user IDs** (e.g. a
 `sAMAccountName` such as `yukio`). Use one of the following as the Bind DN:
 
-- `yukio@example.com` (UPN of an account with read access), or
-- the full DN, e.g. `CN=Yuki Y. Osaka,CN=Users,DC=example,DC=com`.
+- `svc-ldap-read@example.com` (UPN of an account with read access), or
+- the full DN, e.g. `CN=LDAP Read,CN=Users,DC=example,DC=com`.
 
 For production, prefer a dedicated read-only service account instead of a real
 user.
 
+### Mode 3 — Login-template bind (`$login`)
+
+When the **Bind DN contains the literal token `$login`**, the plugin substitutes
+the login ID into the template and binds **the end user's own account directly**,
+then searches the directory as that bound user to fetch attributes.
+
+Example Bind DN:
+
+- `uid=$login,ou=people,dc=example,dc=com`
+- `cn=$login,dc=example,dc=com`
+
+This is useful when every user's DN follows a predictable pattern but you do not
+want to provision a service account, and the directory blocks anonymous search.
+The token match is literal (`$login` only).
+
 ## Sample configuration
 
 A working setup for an Active Directory domain `example.com` with a user whose
-`sAMAccountName` is `yukio` (UPN `yukio@example.com`):
+`sAMAccountName` is `yukio` (the anonymous and service-account subsections are
+AD-oriented; the `$login` subsection is directory-agnostic):
 
-### Default — UPN direct bind (no Bind DN)
+> **Login ID format.** The typed login ID is matched literally against the
+> **Username attribute** (`sAMAccountName` by default), i.e. `(sAMAccountName=<input>)`.
+> Enter the bare attribute value — a UPN like `yukio@example.com` will **not**
+> match `sAMAccountName`. The exact `<input>` expected in each mode is shown
+> below as **Log in as**.
+
+### Default — anonymous search (no Bind DN)
 
 | Setting              | Value                              |
 | -------------------- | ---------------------------------- |
@@ -90,14 +116,23 @@ A working setup for an Active Directory domain `example.com` with a user whose
 | **Base DN**          | `DC=example,DC=com`                |
 | **Bind DN**          | *(leave empty)*                    |
 | **Bind Password**    | *(leave empty)*                    |
-| **User search filter** | `(&(objectClass=user)(sAMAccountName={{username}}))` |
+| **User search filter** | *(optional)* `(&(objectClass=user))` |
 | **Username attribute** | `sAMAccountName`                |
 | **Display name attribute** | `displayName`                  |
 | **Email attribute**  | `mail`                             |
 | **Auto signup**      | on                                 |
 | **Verify TLS / insecure**   | on (if using a self-signed CA) |
 
-Log in as `yukio` or `yukio@example.com`.
+- **Log in as** → `yukio`
+
+  The bare value is required: with `sAMAccountName` as the Username attribute,
+  `yukio@example.com` does not match.
+
+Note the **search filter** is an *optional* AND condition on top of the username
+term; it does **not** embed the login ID (`{{username}}` is no longer substituted).
+
+> Anonymous search does **not** work on Active Directory, which blocks it by
+> default. On AD, use one of the two Bind DN modes below instead.
 
 ### Service-account lookup (with Bind DN)
 
@@ -108,7 +143,48 @@ Same as above, but fill in:
 | **Bind DN**       | `svc-ldap-read@example.com`          |
 | **Bind Password** | `svc-ldap-read-PASSWORD`             |
 
-Log in as `yukio` (the bare `sAMAccountName`).
+- **Log in as** → `yukio`
+
+  (The search runs as the service account and resolves `yukio` by `sAMAccountName`)
+
+### Login-template bind (with `$login` in Bind DN)
+
+The `$login` template is directory-agnostic; the sample below uses an OpenLDAP
+style `uid=` DN. On AD there is no single attribute that reliably equals
+`sAMAccountName` in the DN (AD DNs use `CN=`), so prefer the service-account mode
+on AD. Same settings as above, but fill in:
+
+| Setting                        | Value                                        |
+| ------------------------------ | -------------------------------------------- |
+| **Bind DN**                    | `uid=$login,ou=people,dc=example,dc=com`     |
+| **Bind Password**              | *(unused — the end user's password is used)* |
+
+- **Log in as** → `yukio`
+
+  (`$login` is replaced with `yukio`, binding `uid=yukio,ou=people,dc=example,
+  dc=com` with the supplied password, then the attribute search runs as that
+  bound user using the Username attribute)
+
+### Input-variation summary
+
+The typed login ID always equals the **Username attribute value**. Pick the row
+that matches how the directory keys users:
+
+| Directory login key              | Username attribute  | Example input       |
+| -------------------------------- | ------------------- | ------------------- |
+| `sAMAccountName` (AD)            | `sAMAccountName`    | `yukio`             |
+| `mail` / `userPrincipalName` (AD)| `mail`              | `yukio@example.com` |
+| `uid` (OpenLDAP)                 | `uid`               | `yukio`             |
+| `cn`                             | `cn`                | `yukio`             |
+
+- In every mode the input must be the **Username attribute value** itself:
+- with `sAMAccountName`, `yukio@example.com` does not match; conversely, if the
+  Username attribute is `mail`, then `yukio@example.com` is the correct input.
+- In **login-template mode**, the `$login` token is placed inside a DN RDN whose
+  attribute (**must**) correspond to the login key. For consistency pick a
+  template whose RDN attribute matches the Username attribute value you type
+  (e.g. `cn=$login,...` with an input of `yukio`, or `mail=$login,...` with a
+  UPN input). The subsequent attribute search also uses the Username attribute.
 
 ## Build & Distribution (dist-only tar)
 
